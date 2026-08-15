@@ -58,4 +58,5 @@
 安装全功能 sing-box：
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tong0511/singbox-deploy/main/install-singbox-yyds.sh)"
+curl -fsSL "https://raw.githubusercontent.com/tong0511/singbox-deploy/main/install-singbox-yyds.sh?v=$(date +%s)" -o /tmp/install-singbox.sh && bash /tmp/install-singbox.sh
+```
