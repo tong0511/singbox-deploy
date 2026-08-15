@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # 颜色输出函数
@@ -261,6 +262,11 @@ CONFIG_PATH="/etc/sing-box/config.json"
 
 create_config() {
     info "生成配置文件: $CONFIG_PATH"
+    local config_backup=""
+    if [ -f "$CONFIG_PATH" ]; then
+        config_backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+        cp -p "$CONFIG_PATH" "$config_backup"
+    fi
 
     mkdir -p "$(dirname "$CONFIG_PATH")"
 
@@ -331,9 +337,14 @@ create_config() {
 }
 EOF
 
-    sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1 \
-       && info "配置文件验证通过" \
-       || warn "配置文件验证失败，但继续执行"
+    if ! sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1; then
+        [ -n "$config_backup" ] && cp -p "$config_backup" "$CONFIG_PATH"
+        rm -f "$config_backup"
+        err "配置文件验证失败，已恢复原配置"
+        return 1
+    fi
+    rm -f "$config_backup"
+    info "配置文件验证通过"
 
     mkdir -p /etc/sing-box
     cat > /etc/sing-box/.config_cache <<CACHEEOF
@@ -353,6 +364,8 @@ CACHEEOF
 }
 
 create_config
+chmod 600 "$CONFIG_PATH" /etc/sing-box/.config_cache
+[ -f /etc/sing-box/certs/privkey.pem ] && chmod 600 /etc/sing-box/certs/privkey.pem
 
 # -----------------------
 # 设置服务
@@ -558,6 +571,7 @@ info "正在创建 sb 管理脚本: $SB_PATH"
 cat > "$SB_PATH" <<'SB_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # sb 管理面板（无 python3，使用 jq）
@@ -791,6 +805,7 @@ json_update() {
 action_reset_ss() {
     read -p "输入新的 SS 端口（回车保持 $SS_PORT）: " new_ss_port
     [ -z "$new_ss_port" ] && new_ss_port="$SS_PORT"
+    [[ "$new_ss_port" =~ ^[0-9]+$ ]] && [ "$new_ss_port" -ge 1 ] && [ "$new_ss_port" -le 65535 ] || { err "端口格式无效"; return 1; }
 
     read -p "输入新的 SS 密码（回车随机生成）: " new_ss_psk
     [ -z "$new_ss_psk" ] && new_ss_psk=$(rand_b64)
@@ -821,6 +836,7 @@ action_reset_ss() {
 action_reset_hy2() {
     read -p "输入新的 HY2 端口（回车保持 $HY2_PORT）: " new_hy2_port
     [ -z "$new_hy2_port" ] && new_hy2_port="$HY2_PORT"
+    [[ "$new_hy2_port" =~ ^[0-9]+$ ]] && [ "$new_hy2_port" -ge 1 ] && [ "$new_hy2_port" -le 65535 ] || { err "端口格式无效"; return 1; }
 
     read -p "输入新的 HY2 密码（回车随机生成）: " new_hy2_psk
     [ -z "$new_hy2_psk" ] && new_hy2_psk=$(rand_b64)
@@ -850,6 +866,7 @@ action_reset_hy2() {
 action_reset_reality() {
     read -p "输入新的 Reality 端口（回车保持 $REALITY_PORT）: " new_reality_port
     [ -z "$new_reality_port" ] && new_reality_port="$REALITY_PORT"
+    [[ "$new_reality_port" =~ ^[0-9]+$ ]] && [ "$new_reality_port" -ge 1 ] && [ "$new_reality_port" -le 65535 ] || { err "端口格式无效"; return 1; }
 
     read -p "输入新的 Reality UUID（回车随机生成）: " new_reality_uuid
     [ -z "$new_reality_uuid" ] && new_reality_uuid=$(cat /proc/sys/kernel/random/uuid)
@@ -930,6 +947,7 @@ action_generate_relay_script() {
     cat > "$RELAY_SCRIPT_PATH" <<'RELAY_TEMPLATE'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[ERR]\033[0m $*" >&2; }

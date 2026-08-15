@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # 彩色输出函数
@@ -221,6 +222,10 @@ echo ""
 echo "请输入节点连接 IP 或 DDNS域名(留空默认出口IP):"
 read -r CUSTOM_IP
 CUSTOM_IP="$(echo "$CUSTOM_IP" | tr -d '[:space:]')"
+if [ -n "$CUSTOM_IP" ] && [[ ! "$CUSTOM_IP" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    err "连接地址只能包含字母、数字、点、冒号、下划线和连字符"
+    exit 1
+fi
 
 # 如果用户选择了 Reality 协议，询问 server_name(SNI)
 REALITY_SNI=""
@@ -229,24 +234,16 @@ if $ENABLE_REALITY || $ENABLE_ANYTLS; then
     echo "请输入 Reality 的 SNI(留空默认 addons.mozilla.org):"
     read -r REALITY_SNI
     REALITY_SNI="$(echo "${REALITY_SNI:-addons.mozilla.org}" | tr -d '[:space:]')"
+    if [[ ! "$REALITY_SNI" =~ ^[A-Za-z0-9.-]+$ ]]; then
+        err "SNI 格式无效"
+        exit 1
+    fi
 else
     # 也设默认，方便后续统一处理（若未选 reality，也写入缓存以便 sb 读取）
     REALITY_SNI="addons.mozilla.org"
 fi
 
-# 将用户选择写入缓存
 mkdir -p /etc/sing-box
-# preserve existing cache if any (append/overwrite relevant keys)
-# 最简单直接：在后面 create_config 也会写入 .config_cache，先写初始值以便中间步骤可读取
-echo "CUSTOM_IP=$CUSTOM_IP" > /etc/sing-box/.config_cache.tmp || true
-echo "REALITY_SNI=$REALITY_SNI" >> /etc/sing-box/.config_cache.tmp || true
-# 保留其他可能已有的缓存条目（若存在老的 .config_cache），把新临时与旧文件合并（保新值覆盖旧值）
-if [ -f /etc/sing-box/.config_cache ]; then
-    # 将旧文件中不在新文件内的行追加
-    awk 'FNR==NR{a[$1]=1;next} {split($0,k,"="); if(!(k[1] in a)) print $0}' /etc/sing-box/.config_cache.tmp /etc/sing-box/.config_cache >> /etc/sing-box/.config_cache.tmp2 || true
-    mv /etc/sing-box/.config_cache.tmp2 /etc/sing-box/.config_cache.tmp || true
-fi
-mv /etc/sing-box/.config_cache.tmp /etc/sing-box/.config_cache || true
 
 # -----------------------
 # 生成随机端口
@@ -262,6 +259,32 @@ rand_pass() {
 # 生成UUID
 rand_uuid() {
     cat /proc/sys/kernel/random/uuid
+}
+
+validate_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+validate_configured_ports() {
+    local name port seen=" "
+    while IFS=: read -r name port; do
+        [ -n "$port" ] || continue
+        if ! validate_port "$port"; then
+            err "$name 端口必须是 1-65535 之间的整数: $port"
+            return 1
+        fi
+        if [[ "$seen" == *" $port "* ]]; then
+            err "端口重复: $port"
+            return 1
+        fi
+        seen+="$port "
+    done <<EOF
+SS:${PORT_SS:-}
+HY2:${PORT_HY2:-}
+TUIC:${PORT_TUIC:-}
+VLESS Reality:${PORT_REALITY:-}
+AnyTLS Reality:${PORT_ANYTLS:-}
+EOF
 }
 
 # -----------------------
@@ -340,6 +363,7 @@ get_config() {
     info "AnyTLS Reality 密码已自动生成"
     fi
 
+    validate_configured_ports || exit 1
     info "配置完成，继续安装..."
 }
 
@@ -471,8 +495,9 @@ create_config() {
     mkdir -p "$(dirname "$CONFIG_PATH")"
 
     # 构建 inbounds 内容（使用临时文件避免字符串处理问题）
-    local TEMP_INBOUNDS="/tmp/singbox_inbounds_$.json"
-    > "$TEMP_INBOUNDS"
+    local TEMP_INBOUNDS CONFIG_TMP
+    TEMP_INBOUNDS=$(mktemp /tmp/singbox_inbounds.XXXXXX.json)
+    CONFIG_TMP=$(mktemp /tmp/singbox_config.XXXXXX.json)
     
     local need_comma=false
     
@@ -629,7 +654,7 @@ INBOUND_ANYTLS
     fi
 
     # 生成最终配置
-    cat > "$CONFIG_PATH" <<'CONFIG_HEAD'
+    cat > "$CONFIG_TMP" <<'CONFIG_HEAD'
 {
   "log": {
     "level": "info",
@@ -644,9 +669,9 @@ INBOUND_ANYTLS
   "inbounds": [
 CONFIG_HEAD
     
-    cat "$TEMP_INBOUNDS" >> "$CONFIG_PATH"
+    cat "$TEMP_INBOUNDS" >> "$CONFIG_TMP"
     
-    cat >> "$CONFIG_PATH" <<'CONFIG_TAIL'
+    cat >> "$CONFIG_TMP" <<'CONFIG_TAIL'
   ],
   "outbounds": [
     {
@@ -657,55 +682,46 @@ CONFIG_HEAD
 }
 CONFIG_TAIL
 
-    rm -f "$TEMP_INBOUNDS"
-
-    sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1 \
-       && info "配置文件验证通过" \
-       || warn "配置文件验证失败,但继续执行"
+    if ! sing-box check -c "$CONFIG_TMP" >/dev/null 2>&1; then
+        rm -f "$TEMP_INBOUNDS" "$CONFIG_TMP"
+        err "配置文件验证失败，保留现有配置并终止安装"
+        return 1
+    fi
+    install -m 600 "$CONFIG_TMP" "$CONFIG_PATH"
+    rm -f "$TEMP_INBOUNDS" "$CONFIG_TMP"
+    info "配置文件验证通过"
 
     # 保存配置缓存（追加/覆盖）
-    cat > /etc/sing-box/.config_cache <<CACHEEOF
-ENABLE_SS=$ENABLE_SS
-ENABLE_HY2=$ENABLE_HY2
-ENABLE_TUIC=$ENABLE_TUIC
-ENABLE_REALITY=$ENABLE_REALITY
-ENABLE_ANYTLS=$ENABLE_ANYTLS
-CACHEEOF
+    : > /etc/sing-box/.config_cache
+    cache_value() { printf '%s=%q\n' "$1" "$2" >> /etc/sing-box/.config_cache; }
+    cache_value ENABLE_SS "$ENABLE_SS"
+    cache_value ENABLE_HY2 "$ENABLE_HY2"
+    cache_value ENABLE_TUIC "$ENABLE_TUIC"
+    cache_value ENABLE_REALITY "$ENABLE_REALITY"
+    cache_value ENABLE_ANYTLS "$ENABLE_ANYTLS"
+    $ENABLE_SS && cache_value SS_PORT "$PORT_SS"
+    $ENABLE_SS && cache_value SS_PSK "$PSK_SS"
+    $ENABLE_SS && cache_value SS_METHOD "$SS_METHOD"
+    $ENABLE_HY2 && cache_value HY2_PORT "$PORT_HY2"
+    $ENABLE_HY2 && cache_value HY2_PSK "$PSK_HY2"
+    $ENABLE_TUIC && cache_value TUIC_PORT "$PORT_TUIC"
+    $ENABLE_TUIC && cache_value TUIC_UUID "$UUID_TUIC"
+    $ENABLE_TUIC && cache_value TUIC_PSK "$PSK_TUIC"
+    $ENABLE_REALITY && cache_value REALITY_PORT "$PORT_REALITY"
+    $ENABLE_REALITY && cache_value REALITY_UUID "$UUID"
+    $ENABLE_REALITY && cache_value REALITY_PK "$REALITY_PK"
+    $ENABLE_REALITY && cache_value REALITY_SID "$REALITY_SID"
+    $ENABLE_REALITY && cache_value REALITY_PUB "$REALITY_PUB"
+    cache_value REALITY_SNI "$REALITY_SNI"
+    $ENABLE_ANYTLS && cache_value ANYTLS_PORT "$PORT_ANYTLS"
+    $ENABLE_ANYTLS && cache_value ANYTLS_USER "$ANYTLS_USER"
+    $ENABLE_ANYTLS && cache_value ANYTLS_PSK "$ANYTLS_PSK"
+    cache_value CUSTOM_IP "$CUSTOM_IP"
 
-    $ENABLE_SS && cat >> /etc/sing-box/.config_cache <<CACHEEOF
-SS_PORT=$PORT_SS
-SS_PSK=$PSK_SS
-SS_METHOD=$SS_METHOD
-CACHEEOF
-
-    $ENABLE_HY2 && cat >> /etc/sing-box/.config_cache <<CACHEEOF
-HY2_PORT=$PORT_HY2
-HY2_PSK=$PSK_HY2
-CACHEEOF
-
-    $ENABLE_TUIC && cat >> /etc/sing-box/.config_cache <<CACHEEOF
-TUIC_PORT=$PORT_TUIC
-TUIC_UUID=$UUID_TUIC
-TUIC_PSK=$PSK_TUIC
-CACHEEOF
-
-    $ENABLE_REALITY && cat >> /etc/sing-box/.config_cache <<CACHEEOF
-REALITY_PORT=$PORT_REALITY
-REALITY_UUID=$UUID
-REALITY_PK=$REALITY_PK
-REALITY_SID=$REALITY_SID
-REALITY_PUB=$REALITY_PUB
-REALITY_SNI=$REALITY_SNI
-CACHEEOF
-
-    $ENABLE_ANYTLS && cat >> /etc/sing-box/.config_cache <<CACHEEOF
-ANYTLS_PORT=$PORT_ANYTLS
-ANYTLS_USER=$ANYTLS_USER
-ANYTLS_PSK=$ANYTLS_PSK
-CACHEEOF
-
-    # 全局写入 CUSTOM_IP（哪怕为空也写）
-    echo "CUSTOM_IP=$CUSTOM_IP" >> /etc/sing-box/.config_cache
+    chmod 600 "$CONFIG_PATH" /etc/sing-box/.config_cache /etc/sing-box/.protocols
+    [ -f /etc/sing-box/.reality_pub ] && chmod 600 /etc/sing-box/.reality_pub
+    [ -f /etc/sing-box/.reality_sid ] && chmod 600 /etc/sing-box/.reality_sid
+    [ -f /etc/sing-box/certs/privkey.pem ] && chmod 600 /etc/sing-box/certs/privkey.pem
 
     info "配置缓存已保存到 /etc/sing-box/.config_cache"
 }
@@ -880,7 +896,6 @@ generate_uris() {
     fi
 
     if $ENABLE_ANYTLS; then
-        anytls_user_encoded=$(printf "%s" "$ANYTLS_USER" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
         anytls_pass_encoded=$(printf "%s" "$ANYTLS_PSK" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
         echo "=== AnyTLS Reality ==="
         echo "anytls://${anytls_pass_encoded}@${host}:${PORT_ANYTLS}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#anytls${suffix}"
@@ -939,6 +954,7 @@ info "正在创建 sb 管理面板: $SB_PATH"
 cat > "$SB_PATH" <<'SB_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
@@ -1006,11 +1022,13 @@ read_config() {
     # 优先加载 .protocols 文件（确认协议标记）
     PROTOCOL_FILE="/etc/sing-box/.protocols"
     if [ -f "$PROTOCOL_FILE" ]; then
+        # shellcheck disable=SC1090
         . "$PROTOCOL_FILE"
     fi
     
     # 加载缓存文件（包含端口密码等详细配置）
     if [ -f "$CACHE_FILE" ]; then
+        # shellcheck disable=SC1090
         . "$CACHE_FILE"
     fi
     
@@ -1054,12 +1072,10 @@ if [ "${ENABLE_REALITY:-false}" = "true" ]; then
 
     REALITY_UUID=$(jq -r '.inbounds[] | select(.type=="vless") | .users[0].uuid // empty' "$CONFIG_PATH" | head -n1)
 
-    REALITY_PK=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.private_key // empty' "$CONFIG_PATH" | head -n1)
 fi
 
 if [ "${ENABLE_ANYTLS:-false}" = "true" ]; then
     ANYTLS_PORT=$(jq -r '.inbounds[] | select(.type=="anytls") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
-    ANYTLS_USER=$(jq -r '.inbounds[] | select(.type=="anytls") | .users[0].name // empty' "$CONFIG_PATH" | head -n1)
     ANYTLS_PSK=$(jq -r '.inbounds[] | select(.type=="anytls") | .users[0].password // empty' "$CONFIG_PATH" | head -n1)
 fi
 }
@@ -1088,7 +1104,8 @@ generate_uris() {
     node_suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
     
     URI_FILE="/etc/sing-box/uris.txt"
-    > "$URI_FILE"
+    : > "$URI_FILE"
+    chmod 600 "$URI_FILE"
     
     if [ "${ENABLE_SS:-false}" = "true" ]; then
         ss_userinfo="${SS_METHOD}:${SS_PSK}"
@@ -1123,7 +1140,6 @@ generate_uris() {
     fi
     
     if [ "${ENABLE_ANYTLS:-false}" = "true" ]; then
-        anytls_user_encoded=$(url_encode "$ANYTLS_USER")
         anytls_pass_encoded=$(url_encode "$ANYTLS_PSK")
         echo "=== AnyTLS Reality ===" >> "$URI_FILE"
         echo "anytls://${anytls_pass_encoded}@${PUBLIC_IP}:${ANYTLS_PORT}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#anytls${node_suffix}" >> "$URI_FILE"
@@ -1153,6 +1169,10 @@ action_edit_config() {
         return 1
     fi
     
+    local backup
+    backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+    cp -p "$CONFIG_PATH" "$backup"
+
     ${EDITOR:-nano} "$CONFIG_PATH" 2>/dev/null || ${EDITOR:-vi} "$CONFIG_PATH"
     
     if command -v sing-box >/dev/null 2>&1; then
@@ -1161,161 +1181,136 @@ action_edit_config() {
             service_restart || warn "重启失败"
             generate_uris || true
         else
-            warn "配置校验失败,服务未重启"
+            cp -p "$backup" "$CONFIG_PATH"
+            rm -f "$backup"
+            err "配置校验失败，已恢复编辑前的配置，服务未重启"
+            return 1
         fi
     fi
+    rm -f "$backup"
 }
 
-# 重置SS端口
+validate_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+update_inbound_port() {
+    local protocol_name="$1" inbound_type="$2" current_port="$3" new_port tmp backup
+    read -r -p "输入新的 ${protocol_name} 端口(回车保持 $current_port): " new_port
+    new_port="${new_port:-$current_port}"
+
+    if ! validate_port "$new_port"; then
+        err "端口必须是 1-65535 之间的整数"
+        return 1
+    fi
+    if jq -e --argjson port "$new_port" --arg type "$inbound_type" \
+        '.inbounds[] | select(.type != $type and .listen_port == $port)' \
+        "$CONFIG_PATH" >/dev/null; then
+        err "端口 $new_port 已被另一入站协议使用"
+        return 1
+    fi
+
+    tmp=$(mktemp /tmp/singbox_config.XXXXXX.json)
+    backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+    cp -p "$CONFIG_PATH" "$backup"
+
+    if ! jq --argjson port "$new_port" --arg type "$inbound_type" \
+        '.inbounds |= map(if .type == $type then .listen_port = $port else . end)' \
+        "$CONFIG_PATH" > "$tmp"; then
+        rm -f "$tmp" "$backup"
+        err "更新配置失败，服务保持原状态"
+        return 1
+    fi
+    if ! sing-box check -c "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp" "$backup"
+        err "新配置校验失败，服务保持原状态"
+        return 1
+    fi
+
+    install -m 600 "$tmp" "$CONFIG_PATH"
+    rm -f "$tmp"
+    if ! service_restart; then
+        install -m 600 "$backup" "$CONFIG_PATH"
+        service_restart || true
+        rm -f "$backup"
+        err "服务启动失败，已恢复原配置"
+        return 1
+    fi
+    rm -f "$backup"
+    info "已更新 ${protocol_name} 端口: $new_port"
+    generate_uris || warn "生成 URI 失败"
+}
+
 action_reset_ss() {
     read_config || return 1
-    
-    if [ "${ENABLE_SS:-false}" != "true" ]; then
-        err "SS 协议未启用"
-        return 1
-    fi
-    
-    read -p "输入新的 SS 端口(回车保持 $SS_PORT): " new_port
-    new_port="${new_port:-$SS_PORT}"
-    
-    info "正在停止服务..."
-    service_stop || warn "停止服务失败"
-    
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-    
-    jq --argjson port "$new_port" '
-    .inbounds |= map(if .type=="shadowsocks" then .listen_port = $port else . end)
-    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    
-    info "已启动服务并更新 SS 端口: $new_port"
-    service_start || warn "启动服务失败"
-    sleep 1
-    generate_uris || warn "生成 URI 失败"
+    [ "${ENABLE_SS:-false}" = "true" ] || { err "SS 协议未启用"; return 1; }
+    update_inbound_port "SS" "shadowsocks" "$SS_PORT"
 }
 
-# 重置HY2端口
 action_reset_hy2() {
     read_config || return 1
-    
-    if [ "${ENABLE_HY2:-false}" != "true" ]; then
-        err "HY2 协议未启用"
-        return 1
-    fi
-    
-    read -p "输入新的 HY2 端口(回车保持 $HY2_PORT): " new_port
-    new_port="${new_port:-$HY2_PORT}"
-    
-    info "正在停止服务..."
-    service_stop || warn "停止服务失败"
-    
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-    
-    jq --argjson port "$new_port" '
-    .inbounds |= map(if .type=="hysteria2" then .listen_port = $port else . end)
-    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    
-    info "已启动服务并更新 HY2 端口: $new_port"
-    service_start || warn "启动服务失败"
-    sleep 1
-    generate_uris || warn "生成 URI 失败"
+    [ "${ENABLE_HY2:-false}" = "true" ] || { err "HY2 协议未启用"; return 1; }
+    update_inbound_port "HY2" "hysteria2" "$HY2_PORT"
 }
 
-# 重置TUIC端口
 action_reset_tuic() {
     read_config || return 1
-    
-    if [ "${ENABLE_TUIC:-false}" != "true" ]; then
-        err "TUIC 协议未启用"
-        return 1
-    fi
-    
-    read -p "输入新的 TUIC 端口(回车保持 $TUIC_PORT): " new_port
-    new_port="${new_port:-$TUIC_PORT}"
-    
-    info "正在停止服务..."
-    service_stop || warn "停止服务失败"
-    
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-    
-    jq --argjson port "$new_port" '
-    .inbounds |= map(if .type=="tuic" then .listen_port = $port else . end)
-    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    
-    info "已启动服务并更新 TUIC 端口: $new_port"
-    service_start || warn "启动服务失败"
-    sleep 1
-    generate_uris || warn "生成 URI 失败"
+    [ "${ENABLE_TUIC:-false}" = "true" ] || { err "TUIC 协议未启用"; return 1; }
+    update_inbound_port "TUIC" "tuic" "$TUIC_PORT"
 }
 
-# 重置Vless Reality端口
 action_reset_reality() {
     read_config || return 1
-    
-    if [ "${ENABLE_REALITY:-false}" != "true" ]; then
-        err "Vless Reality 协议未启用"
-        return 1
-    fi
-    
-    read -p "输入新的 Vless Reality 端口(回车保持 $REALITY_PORT): " new_port
-    new_port="${new_port:-$REALITY_PORT}"
-    
-    info "正在停止服务..."
-    service_stop || warn "停止服务失败"
-    
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-    
-    jq --argjson port "$new_port" '
-    .inbounds |= map(if .type=="vless" then .listen_port = $port else . end)
-    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-    
-    info "已启动服务并更新 Vless Reality 端口: $new_port"
-    service_start || warn "启动服务失败"
-    sleep 1
-    generate_uris || warn "生成 URI 失败"
+    [ "${ENABLE_REALITY:-false}" = "true" ] || { err "Vless Reality 协议未启用"; return 1; }
+    update_inbound_port "Vless Reality" "vless" "$REALITY_PORT"
 }
 
-# 重置AnyTLS Reality端口
 action_reset_anytls() {
     read_config || return 1
-
-    if [ "${ENABLE_ANYTLS:-false}" != "true" ]; then
-        err "AnyTLS Reality 协议未启用"
-        return 1
-    fi
-
-    read -p "输入新的 AnyTLS Reality 端口(回车保持 $ANYTLS_PORT): " new_port
-    new_port="${new_port:-$ANYTLS_PORT}"
-
-    info "正在停止服务..."
-    service_stop || warn "停止服务失败"
-
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-
-    jq --argjson port "$new_port" '
-    .inbounds |= map(if .type=="anytls" then .listen_port = $port else . end)
-    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
-
-    info "已启动服务并更新 AnyTLS Reality 端口: $new_port"
-    service_start || warn "启动服务失败"
-    sleep 1
-    generate_uris || warn "生成 URI 失败"
+    [ "${ENABLE_ANYTLS:-false}" = "true" ] || { err "AnyTLS Reality 协议未启用"; return 1; }
+    update_inbound_port "AnyTLS Reality" "anytls" "$ANYTLS_PORT"
 }
 
 # 更新sing-box
 action_update() {
     info "开始更新 sing-box..."
+    local current_bin backup_bin installer
+    current_bin=$(command -v sing-box 2>/dev/null || true)
+    [ -n "$current_bin" ] || { err "未找到 sing-box 可执行文件"; return 1; }
+    backup_bin=$(mktemp /tmp/sing-box_binary_backup.XXXXXX)
+    installer=$(mktemp /tmp/sing-box_installer.XXXXXX.sh)
+    cp -p "$current_bin" "$backup_bin"
+
     if [ "$OS" = "alpine" ]; then
-        apk update && apk upgrade sing-box || bash <(curl -fsSL https://sing-box.app/install.sh)
+        if ! apk update || ! apk upgrade sing-box; then
+            warn "软件包更新失败，尝试官方安装脚本"
+            if ! curl -fsSL https://sing-box.app/install.sh -o "$installer" || ! bash "$installer"; then
+                install -m 755 "$backup_bin" "$current_bin"
+                rm -f "$backup_bin" "$installer"
+                err "更新失败，已恢复原二进制"
+                return 1
+            fi
+        fi
     else
-        bash <(curl -fsSL https://sing-box.app/install.sh)
+        if ! curl -fsSL https://sing-box.app/install.sh -o "$installer" || ! bash "$installer"; then
+            install -m 755 "$backup_bin" "$current_bin"
+            rm -f "$backup_bin" "$installer"
+            err "更新失败，已恢复原二进制"
+            return 1
+        fi
     fi
-    
-    info "更新完成,已重启服务..."
-    if command -v sing-box >/dev/null 2>&1; then
-        NEW_VER=$(sing-box version 2>/dev/null | head -n1)
-        info "当前版本: $NEW_VER"
-        service_restart || warn "重启失败"
+
+    rm -f "$installer"
+    if ! sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1 || ! service_restart; then
+        install -m 755 "$backup_bin" "$current_bin"
+        service_restart || true
+        rm -f "$backup_bin"
+        err "新版本校验或启动失败，已恢复原二进制"
+        return 1
     fi
+    rm -f "$backup_bin"
+    NEW_VER=$(sing-box version 2>/dev/null | head -n1)
+    info "更新完成并已重启服务，当前版本: $NEW_VER"
 }
 
 # 卸载

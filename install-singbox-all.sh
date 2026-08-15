@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # 颜色输出函数
@@ -216,6 +217,11 @@ CONFIG_PATH="/etc/sing-box/config.json"
 
 create_config() {
     info "生成配置文件: $CONFIG_PATH"
+    local config_backup=""
+    if [ -f "$CONFIG_PATH" ]; then
+        config_backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+        cp -p "$CONFIG_PATH" "$config_backup"
+    fi
     
     mkdir -p "$(dirname "$CONFIG_PATH")"
     
@@ -249,12 +255,17 @@ EOF
         if sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1; then
             info "配置文件验证通过"
         else
-            warn "配置文件验证失败，但将继续..."
+            [ -n "$config_backup" ] && cp -p "$config_backup" "$CONFIG_PATH"
+            rm -f "$config_backup"
+            err "配置文件验证失败，已恢复原配置"
+            return 1
         fi
     fi
+    rm -f "$config_backup"
 }
 
 create_config
+chmod 600 "$CONFIG_PATH"
 
 # -----------------------
 # 设置服务
@@ -464,6 +475,7 @@ info "正在创建 sb 管理脚本: $SB_PATH"
 cat > "$SB_PATH" <<'SB_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # 颜色输出函数
@@ -655,6 +667,10 @@ action_reset_port_pwd() {
 
     read -p "输入新端口（回车随机 10000-60000）： " new_port
     [ -z "$new_port" ] && new_port=$((RANDOM % 50001 + 10000))
+    [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ] || {
+        err "端口必须是 1-65535 之间的整数"
+        return 1
+    }
 
     read -p "输入新密码（回车随机生成 Base64 密钥）： " new_pwd
     [ -z "$new_pwd" ] && new_pwd=$(head -c 16 /dev/urandom | base64 | tr -d '\n\r')
@@ -699,17 +715,17 @@ action_update() {
         apk update || warn "apk update 失败"
         apk add --upgrade --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
             warn "apk 更新失败，尝试用官方安装脚本"
-            bash <(curl -fsSL https://sing-box.app/install.sh) || err "更新失败"
+            bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
         }
     else
-        bash <(curl -fsSL https://sing-box.app/install.sh) || err "更新失败"
+        bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
     fi
 
     info "更新完成，重启服务..."
     if command -v sing-box >/dev/null 2>&1; then
         NEW_VER=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
         info "当前 sing-box 版本: $NEW_VER"
-        service_restart || warn "重启失败"
+        service_restart || { err "更新后服务重启失败"; return 1; }
     else
         warn "更新后未检测到 sing-box 可执行文件"
     fi
@@ -759,6 +775,7 @@ action_generate_relay_script() {
     cat > "$RELAY_SCRIPT_PATH" << 'RELAY_TEMPLATE'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 INBOUND_IP="__INBOUND_IP__"
 INBOUND_PORT="__INBOUND_PORT__"
 INBOUND_METHOD="__INBOUND_METHOD__"
