@@ -37,7 +37,7 @@
     </td>
     <td align="center" width="220">
       <a href="https://yuusei.io/" target="_blank">
-        <img src="https://github.com/caigouzi121380/singbox-deploy/blob/main/yuu.svg" width="100" alt="Yuusei Network" />
+        <img src="https://github.com/tong0511/singbox-deploy/blob/main/yuu.svg" width="100" alt="Yuusei Network" />
         <br><sub><b>Yuusei Network</b></sub>
       </a>
     </td>
@@ -58,4 +58,4 @@
 安装全功能 sing-box：
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/caigouzi121380/singbox-deploy/main/install-singbox-yyds.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tong0511/singbox-deploy/main/install-singbox-yyds.sh)"
