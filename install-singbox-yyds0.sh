@@ -184,7 +184,7 @@ install_singbox() {
         alpine)
             info "使用 Edge 仓库安装 sing-box"
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
                 err "sing-box 安装失败"
                 exit 1
             }
@@ -211,6 +211,8 @@ install_singbox() {
 }
 
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 
 # -----------------------
 # 生成 Reality 密钥对和自签名证书
@@ -897,7 +899,7 @@ action_update() {
     info "开始更新 sing-box..."
     if [ "$OS" = "alpine" ]; then
         apk update || warn "apk update 失败"
-        apk add --upgrade --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+        apk add --upgrade --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
             warn "apk 更新失败，尝试官方安装脚本"
             bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
         }
@@ -976,11 +978,13 @@ install_deps
 
 install_singbox(){
     case "$OS" in
-        alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
+        alpine) apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
         *) bash <(curl -fsSL https://sing-box.app/install.sh) ;;
     esac
 }
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 
 UUID=$(cat /proc/sys/kernel/random/uuid)
 

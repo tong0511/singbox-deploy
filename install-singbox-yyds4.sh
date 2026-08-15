@@ -311,7 +311,7 @@ install_singbox() {
         alpine)
             info "使用 Edge 仓库安装 sing-box"
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
                 err "sing-box 安装失败"
                 exit 1
             }
@@ -338,6 +338,8 @@ install_singbox() {
 }
 
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 
 # -----------------------
 # 生成 Reality 密钥对（必须在 sing-box 安装之后）
@@ -878,16 +880,16 @@ load_cache_file() {
 
 # 服务控制
 service_start() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" start || systemctl start "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then rc-service "$SERVICE_NAME" start; else systemctl start "$SERVICE_NAME"; fi
 }
 service_stop() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" stop || systemctl stop "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then rc-service "$SERVICE_NAME" stop; else systemctl stop "$SERVICE_NAME"; fi
 }
 service_restart() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" restart || systemctl restart "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then rc-service "$SERVICE_NAME" restart; else systemctl restart "$SERVICE_NAME"; fi
 }
 service_status() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" status || systemctl status "$SERVICE_NAME" --no-pager
+    if [ "$OS" = "alpine" ]; then rc-service "$SERVICE_NAME" status; else systemctl status "$SERVICE_NAME" --no-pager; fi
 }
 
 # 生成随机值
@@ -943,7 +945,6 @@ read_config() {
     if [ "${ENABLE_REALITY:-false}" = "true" ]; then
         REALITY_PORT=$(jq -r '.inbounds[] | select(.type=="vless") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
         REALITY_UUID=$(jq -r '.inbounds[] | select(.type=="vless") | .users[0].uuid // empty' "$CONFIG_PATH" | head -n1)
-        REALITY_PK=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.private_key // empty' "$CONFIG_PATH" | head -n1)
         REALITY_SID=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.short_id[0] // empty' "$CONFIG_PATH" | head -n1)
         [ -f /etc/sing-box/.reality_pub ] && REALITY_PUB=$(cat /etc/sing-box/.reality_pub)
     fi
@@ -973,7 +974,7 @@ generate_uris() {
     node_suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
     
     URI_FILE="/etc/sing-box/uris.txt"
-    > "$URI_FILE"
+    : > "$URI_FILE"
     
     if [ "${ENABLE_SS:-false}" = "true" ]; then
         ss_userinfo="${SS_METHOD}:${SS_PSK}"
@@ -1301,9 +1302,11 @@ esac
 
 info "安装 sing-box..."
 case "$OS" in
-    alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
+    alpine) apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
     *) bash <(curl -fsSL https://sing-box.app/install.sh) ;;
 esac
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 
 UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "00000000-0000-0000-0000-000000000000")
 

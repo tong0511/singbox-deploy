@@ -142,7 +142,7 @@ install_singbox() {
         alpine)
             info "使用 Edge 仓库安装 sing-box"
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
                 err "sing-box 安装失败"
                 exit 1
             }
@@ -172,6 +172,8 @@ install_singbox() {
 }
 
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 
 # -----------------------
 # 生成密码
@@ -420,7 +422,8 @@ generate_uri() {
     fi
     
     # Base64 格式
-    local base64_userinfo=$(printf "%s" "$userinfo" | base64 -w0 2>/dev/null || printf "%s" "$userinfo" | base64 | tr -d '\n')
+    local base64_userinfo
+    base64_userinfo=$(printf "%s" "$userinfo" | base64 -w0 2>/dev/null || printf "%s" "$userinfo" | base64 | tr -d '\n')
     
     echo "ss://${encoded_userinfo}@${host}:${PORT}#${tag}"
     echo "ss://${base64_userinfo}@${host}:${PORT}#${tag}"
@@ -713,7 +716,7 @@ action_update() {
     info "开始更新 sing-box..."
     if [ "$OS" = "alpine" ]; then
         apk update || warn "apk update 失败"
-        apk add --upgrade --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+        apk add --upgrade --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
             warn "apk 更新失败，尝试用官方安装脚本"
             bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
         }
@@ -818,7 +821,7 @@ install_singbox() {
     info "安装 sing-box..."
     case "$OS" in
         alpine)
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box
+            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box
         ;;
         *)
             bash <(curl -fsSL https://sing-box.app/install.sh)
@@ -826,6 +829,8 @@ install_singbox() {
     esac
 }
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+[ "$SING_BOX_BIN" = "/usr/bin/sing-box" ] || [ -e /usr/bin/sing-box ] || ln -s "$SING_BOX_BIN" /usr/bin/sing-box
 UUID=$(cat /proc/sys/kernel/random/uuid)
 info "生成 Reality 密钥对"
 # 生成 Reality 密钥对

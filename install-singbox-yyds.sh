@@ -388,7 +388,7 @@ install_singbox() {
         alpine)
             info "使用 Edge 仓库安装 sing-box"
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
                 err "sing-box 安装失败"
                 exit 1
             }
@@ -737,6 +737,7 @@ info "配置生成完成，准备设置服务..."
 # 设置服务
 setup_service() {
     info "配置系统服务..."
+    SERVICE_ACTIVE=false
     
     if [ "$OS" = "alpine" ]; then
         SERVICE_PATH="/etc/init.d/sing-box"
@@ -779,6 +780,7 @@ OPENRC
         
         sleep 2
         if rc-service sing-box status >/dev/null 2>&1; then
+            SERVICE_ACTIVE=true
             info "✅ OpenRC 服务已启动"
         else
             warn "服务状态异常，将继续创建节点链接和 sb 管理命令"
@@ -820,6 +822,7 @@ SYSTEMD
         
         sleep 2
         if systemctl is-active sing-box >/dev/null 2>&1; then
+            SERVICE_ACTIVE=true
             info "✅ Systemd 服务已启动"
         else
             warn "服务状态异常，将继续创建节点链接和 sb 管理命令"
@@ -867,6 +870,7 @@ fi
 # 生成链接(仅生成已选择的协议)
 generate_uris() {
     local host="$PUB_IP"
+    [[ "$host" == *:* && "$host" != \[*\] ]] && host="[$host]"
     
     if $ENABLE_SS; then
         local ss_userinfo="${SS_METHOD}:${PSK_SS}"
@@ -911,7 +915,11 @@ generate_uris() {
 # 最终输出
 echo ""
 echo "=========================================="
-info "🎉 Sing-box 部署完成!"
+if $SERVICE_ACTIVE; then
+    info "🎉 Sing-box 部署完成!"
+else
+    warn "Sing-box 文件已安装，但服务状态异常"
+fi
 echo "=========================================="
 echo ""
 info "📋 配置信息:"
@@ -994,16 +1002,32 @@ detect_os
 
 # 服务控制
 service_start() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" start || systemctl start "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then
+        rc-service "$SERVICE_NAME" start
+    else
+        systemctl start "$SERVICE_NAME"
+    fi
 }
 service_stop() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" stop || systemctl stop "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then
+        rc-service "$SERVICE_NAME" stop
+    else
+        systemctl stop "$SERVICE_NAME"
+    fi
 }
 service_restart() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" restart || systemctl restart "$SERVICE_NAME"
+    if [ "$OS" = "alpine" ]; then
+        rc-service "$SERVICE_NAME" restart
+    else
+        systemctl restart "$SERVICE_NAME"
+    fi
 }
 service_status() {
-    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" status || systemctl status "$SERVICE_NAME" --no-pager
+    if [ "$OS" = "alpine" ]; then
+        rc-service "$SERVICE_NAME" status
+    else
+        systemctl status "$SERVICE_NAME" --no-pager
+    fi
 }
 
 # 生成随机值
@@ -1104,6 +1128,8 @@ generate_uris() {
     else
         PUBLIC_IP=$(get_public_ip)
     fi
+    URI_HOST="$PUBLIC_IP"
+    [[ "$URI_HOST" == *:* && "$URI_HOST" != \[*\] ]] && URI_HOST="[$URI_HOST]"
 
     node_suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
     
@@ -1117,36 +1143,36 @@ generate_uris() {
         ss_b64=$(printf "%s" "$ss_userinfo" | base64 -w0 2>/dev/null || printf "%s" "$ss_userinfo" | base64 | tr -d '\n')
         
         echo "=== Shadowsocks (SS) ===" >> "$URI_FILE"
-        echo "ss://${ss_encoded}@${PUBLIC_IP}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
-        echo "ss://${ss_b64}@${PUBLIC_IP}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
+        echo "ss://${ss_encoded}@${URI_HOST}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
+        echo "ss://${ss_b64}@${URI_HOST}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
     
     if [ "${ENABLE_HY2:-false}" = "true" ]; then
         hy2_encoded=$(url_encode "$HY2_PSK")
         echo "=== Hysteria2 (HY2) ===" >> "$URI_FILE"
-        echo "hy2://${hy2_encoded}@${PUBLIC_IP}:${HY2_PORT}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${node_suffix}" >> "$URI_FILE"
+        echo "hy2://${hy2_encoded}@${URI_HOST}:${HY2_PORT}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
     
     if [ "${ENABLE_TUIC:-false}" = "true" ]; then
         tuic_encoded=$(url_encode "$TUIC_PSK")
         echo "=== TUIC ===" >> "$URI_FILE"
-        echo "tuic://${TUIC_UUID}:${tuic_encoded}@${PUBLIC_IP}:${TUIC_PORT}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${node_suffix}" >> "$URI_FILE"
+        echo "tuic://${TUIC_UUID}:${tuic_encoded}@${URI_HOST}:${TUIC_PORT}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
     
     if [ "${ENABLE_REALITY:-false}" = "true" ]; then
         REALITY_SNI="${REALITY_SNI:-addons.mozilla.org}"
         echo "=== VLESS Reality ===" >> "$URI_FILE"
-        echo "vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${node_suffix}" >> "$URI_FILE"
+        echo "vless://${REALITY_UUID}@${URI_HOST}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
     
     if [ "${ENABLE_ANYTLS:-false}" = "true" ]; then
         anytls_pass_encoded=$(url_encode "$ANYTLS_PSK")
         echo "=== AnyTLS Reality ===" >> "$URI_FILE"
-        echo "anytls://${anytls_pass_encoded}@${PUBLIC_IP}:${ANYTLS_PORT}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#anytls${node_suffix}" >> "$URI_FILE"
+        echo "anytls://${anytls_pass_encoded}@${URI_HOST}:${ANYTLS_PORT}/?security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#anytls${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
 
@@ -1445,7 +1471,7 @@ esac
 
 info "安装 sing-box..."
 case "$OS" in
-    alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
+    alpine) apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
     *) bash <(curl -fsSL https://sing-box.app/install.sh) ;;
 esac
 SING_BOX_BIN=$(command -v sing-box)
@@ -1701,3 +1727,5 @@ SB_SCRIPT
 chmod +x "$SB_PATH"
 ln -sf /usr/local/bin/sb /usr/bin/sb
 info "✅ 管理面板已创建,可输入 sb 打开管理面板"
+
+$SERVICE_ACTIVE || exit 1
