@@ -415,6 +415,8 @@ install_singbox() {
 }
 
 install_singbox
+SING_BOX_BIN=$(command -v sing-box)
+info "sing-box 可执行文件: $SING_BOX_BIN"
 
 # -----------------------
 # 生成 Reality 密钥对（必须在 sing-box 安装之后）
@@ -744,7 +746,7 @@ setup_service() {
 
 name="sing-box"
 description="Sing-box Proxy Server"
-command="/usr/bin/sing-box"
+command="SING_BOX_BIN_PLACEHOLDER"
 command_args="run -c /etc/sing-box/config.json"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background="yes"
@@ -764,21 +766,22 @@ start_pre() {
     checkpath --directory --mode 0755 /run
 }
 OPENRC
+
+        sed -i "s|SING_BOX_BIN_PLACEHOLDER|$SING_BOX_BIN|g" "$SERVICE_PATH"
         
         chmod +x "$SERVICE_PATH"
         rc-update add sing-box default >/dev/null 2>&1 || warn "添加开机自启失败"
         rc-service sing-box restart || {
             err "服务启动失败"
             tail -20 /var/log/sing-box.err 2>/dev/null || tail -20 /var/log/sing-box.log 2>/dev/null || true
-            exit 1
+            warn "将继续创建节点链接和 sb 管理命令，便于检查和修复"
         }
         
         sleep 2
         if rc-service sing-box status >/dev/null 2>&1; then
             info "✅ OpenRC 服务已启动"
         else
-            err "服务状态异常"
-            exit 1
+            warn "服务状态异常，将继续创建节点链接和 sb 管理命令"
         fi
         
     else
@@ -795,7 +798,7 @@ Wants=network.target
 Type=simple
 User=root
 WorkingDirectory=/etc/sing-box
-ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=SING_BOX_BIN_PLACEHOLDER run -c /etc/sing-box/config.json
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10s
@@ -804,21 +807,22 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 SYSTEMD
+
+        sed -i "s|SING_BOX_BIN_PLACEHOLDER|$SING_BOX_BIN|g" "$SERVICE_PATH"
         
         systemctl daemon-reload
         systemctl enable sing-box >/dev/null 2>&1
         systemctl restart sing-box || {
             err "服务启动失败"
-            journalctl -u sing-box -n 30 --no-pager
-            exit 1
+            journalctl -u sing-box -n 30 --no-pager || true
+            warn "将继续创建节点链接和 sb 管理命令，便于检查和修复"
         }
         
         sleep 2
         if systemctl is-active sing-box >/dev/null 2>&1; then
             info "✅ Systemd 服务已启动"
         else
-            err "服务状态异常"
-            exit 1
+            warn "服务状态异常，将继续创建节点链接和 sb 管理命令"
         fi
     fi
     
@@ -1444,6 +1448,7 @@ case "$OS" in
     alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
     *) bash <(curl -fsSL https://sing-box.app/install.sh) ;;
 esac
+SING_BOX_BIN=$(command -v sing-box)
 
 UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "00000000-0000-0000-0000-000000000000")
 
@@ -1499,7 +1504,7 @@ if [ "$OS" = "alpine" ]; then
     cat > /etc/init.d/sing-box <<'SVC'
 #!/sbin/openrc-run
 name="sing-box"
-command="/usr/bin/sing-box"
+command="SING_BOX_BIN_PLACEHOLDER"
 command_args="run -c /etc/sing-box/config.json"
 command_background="yes"
 pidfile="/run/sing-box.pid"
@@ -1508,6 +1513,7 @@ supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
 
 depend() { need net; }
 SVC
+    sed -i "s|SING_BOX_BIN_PLACEHOLDER|$SING_BOX_BIN|g" /etc/init.d/sing-box
     chmod +x /etc/init.d/sing-box
     rc-update add sing-box default
     rc-service sing-box restart
@@ -1517,12 +1523,13 @@ else
 Description=Sing-box Relay
 After=network.target
 [Service]
-ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+ExecStart=SING_BOX_BIN_PLACEHOLDER run -c /etc/sing-box/config.json
 Restart=on-failure
 RestartSec=10s
 [Install]
 WantedBy=multi-user.target
 SYSTEMD
+    sed -i "s|SING_BOX_BIN_PLACEHOLDER|$SING_BOX_BIN|g" /etc/systemd/system/sing-box.service
     systemctl daemon-reload
     systemctl enable sing-box
     systemctl restart sing-box
