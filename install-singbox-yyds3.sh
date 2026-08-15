@@ -821,6 +821,17 @@ detect_os() {
 
 detect_os
 
+load_cache_file() {
+    local file="$1" key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ENABLE_SS|ENABLE_HY2|ENABLE_TUIC|ENABLE_REALITY|SS_PORT|SS_PSK|SS_METHOD|HY2_PORT|HY2_PSK|TUIC_PORT|TUIC_UUID|TUIC_PSK|REALITY_PORT|REALITY_UUID|REALITY_PK|REALITY_SID|REALITY_PUB|REALITY_SNI|CUSTOM_IP)
+                printf -v "$key" '%s' "$value"
+                ;;
+        esac
+    done < "$file"
+}
+
 # 服务控制
 service_start() {
     [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" start || systemctl start "$SERVICE_NAME"
@@ -855,12 +866,12 @@ read_config() {
     # 优先加载 .protocols 文件（权威协议标记）
     PROTOCOL_FILE="/etc/sing-box/.protocols"
     if [ -f "$PROTOCOL_FILE" ]; then
-        . "$PROTOCOL_FILE"
+        load_cache_file "$PROTOCOL_FILE"
     fi
     
     # 再加载缓存文件（包含端口密码等详细配置）
     if [ -f "$CACHE_FILE" ]; then
-        . "$CACHE_FILE"
+        load_cache_file "$CACHE_FILE"
     fi
     
     # 读取各协议配置

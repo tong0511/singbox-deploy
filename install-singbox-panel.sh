@@ -731,17 +731,17 @@ action_update() {
         apk update || warn "apk update 失败"
         apk add --upgrade --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
             warn "apk 更新失败，尝试用官方安装脚本"
-            bash <(curl -fsSL https://sing-box.app/install.sh) || err "更新失败"
+            bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
         }
     else
-        bash <(curl -fsSL https://sing-box.app/install.sh) || err "更新失败"
+        bash <(curl -fsSL https://sing-box.app/install.sh) || { err "更新失败"; return 1; }
     fi
 
     info "更新完成，重启服务..."
     if command -v sing-box >/dev/null 2>&1; then
         NEW_VER=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
         info "当前 sing-box 版本: $NEW_VER"
-        service_restart || warn "重启失败"
+        service_restart || { err "更新后服务重启失败"; return 1; }
     else
         warn "更新后未检测到 sing-box 可执行文件"
     fi
