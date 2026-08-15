@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # -----------------------
 # 颜色输出函数
@@ -216,6 +217,11 @@ CONFIG_PATH="/etc/sing-box/config.json"
 
 create_config() {
     info "生成配置文件: $CONFIG_PATH"
+    local config_backup=""
+    if [ -f "$CONFIG_PATH" ]; then
+        config_backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+        cp -p "$CONFIG_PATH" "$config_backup"
+    fi
     
     mkdir -p "$(dirname "$CONFIG_PATH")"
     
@@ -249,12 +255,17 @@ EOF
         if sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1; then
             info "配置文件验证通过"
         else
-            warn "配置文件验证失败，但将继续..."
+            [ -n "$config_backup" ] && cp -p "$config_backup" "$CONFIG_PATH"
+            rm -f "$config_backup"
+            err "配置文件验证失败，已恢复原配置"
+            return 1
         fi
     fi
+    rm -f "$config_backup"
 }
 
 create_config
+chmod 600 "$CONFIG_PATH"
 
 # -----------------------
 # 设置服务
