@@ -416,7 +416,7 @@ create_config() {
     info "生成配置文件: $CONFIG_PATH"
     local config_backup=""
     if [ -f "$CONFIG_PATH" ]; then
-        config_backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+        config_backup=$(mktemp /tmp/singbox_config_backup.json.XXXXXX)
         cp -p "$CONFIG_PATH" "$config_backup"
     fi
 
@@ -424,7 +424,7 @@ create_config() {
 
     # 构建 inbounds 内容（使用临时文件避免字符串处理问题）
     local TEMP_INBOUNDS
-    TEMP_INBOUNDS=$(mktemp /tmp/singbox_inbounds.XXXXXX.json)
+    TEMP_INBOUNDS=$(mktemp /tmp/singbox_inbounds.json.XXXXXX)
     
     local need_comma=false
     

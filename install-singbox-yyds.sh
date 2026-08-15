@@ -498,8 +498,8 @@ create_config() {
 
     # 构建 inbounds 内容（使用临时文件避免字符串处理问题）
     local TEMP_INBOUNDS CONFIG_TMP
-    TEMP_INBOUNDS=$(mktemp /tmp/singbox_inbounds.XXXXXX.json)
-    CONFIG_TMP=$(mktemp /tmp/singbox_config.XXXXXX.json)
+    TEMP_INBOUNDS=$(mktemp /tmp/singbox_inbounds.json.XXXXXX)
+    CONFIG_TMP=$(mktemp /tmp/singbox_config.json.XXXXXX)
     
     local need_comma=false
     
@@ -1174,7 +1174,7 @@ action_edit_config() {
     fi
     
     local backup
-    backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+    backup=$(mktemp /tmp/singbox_config_backup.json.XXXXXX)
     cp -p "$CONFIG_PATH" "$backup"
 
     ${EDITOR:-nano} "$CONFIG_PATH" 2>/dev/null || ${EDITOR:-vi} "$CONFIG_PATH"
@@ -1214,8 +1214,8 @@ update_inbound_port() {
         return 1
     fi
 
-    tmp=$(mktemp /tmp/singbox_config.XXXXXX.json)
-    backup=$(mktemp /tmp/singbox_config_backup.XXXXXX.json)
+    tmp=$(mktemp /tmp/singbox_config.json.XXXXXX)
+    backup=$(mktemp /tmp/singbox_config_backup.json.XXXXXX)
     cp -p "$CONFIG_PATH" "$backup"
 
     if ! jq --argjson port "$new_port" --arg type "$inbound_type" \
@@ -1282,7 +1282,7 @@ action_update() {
     current_bin=$(command -v sing-box 2>/dev/null || true)
     [ -n "$current_bin" ] || { err "未找到 sing-box 可执行文件"; return 1; }
     backup_bin=$(mktemp /tmp/sing-box_binary_backup.XXXXXX)
-    installer=$(mktemp /tmp/sing-box_installer.XXXXXX.sh)
+    installer=$(mktemp /tmp/sing-box_installer.sh.XXXXXX)
     cp -p "$current_bin" "$backup_bin"
 
     if [ "$OS" = "alpine" ]; then
